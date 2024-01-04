@@ -245,7 +245,7 @@ class WalletRpcClient(RpcClient):
         if memos is not None:
             request["memos"] = memos
         response = await self.fetch("send_transaction", request)
-        return SendTransactionResponse.from_json_dict(response["transaction"])
+        return SendTransactionResponse.from_json_dict(response)
 
     async def send_transaction_multi(
         self,
@@ -273,7 +273,7 @@ class WalletRpcClient(RpcClient):
             coins_json = [c.to_json_dict() for c in coins]
             request["coins"] = coins_json
         response = await self.fetch("send_transaction_multi", request)
-        return SendTransactionMultiResponse.from_json_dict(response["transaction"])
+        return SendTransactionMultiResponse.from_json_dict(response)
 
     async def spend_clawback_coins(
         self,
