@@ -602,7 +602,7 @@ class Wallet:
 
         responses: List[SigningResponse] = []
         for target in signing_instructions.targets:
-            pk_fingerprint: int = G1Element.from_bytes(target.pubkey).get_fingerprint()
+            pk_fingerprint: int = int.from_bytes(target.fingerprint, "big")
             if pk_fingerprint not in sk_lookup:
                 if not partial_allowed:
                     raise ValueError(f"Pubkey {pk_fingerprint} not found (or path/sum hinted to)")

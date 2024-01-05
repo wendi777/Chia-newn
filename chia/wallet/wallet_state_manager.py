@@ -2584,7 +2584,8 @@ class WalletStateManager:
                 conditions_dict, _coin_spend.coin, self.constants.AGG_SIG_ME_ADDITIONAL_DATA
             ):
                 pks.append(pk_bytes)
-                signing_targets.append(SigningTarget(pk_bytes, msg, std_hash(pk_bytes + msg)))
+                fingerprint: bytes = G1Element.from_bytes(pk_bytes).get_fingerprint().to_bytes(4, "big")
+                signing_targets.append(SigningTarget(fingerprint, msg, std_hash(pk_bytes + msg)))
 
         return SigningInstructions(
             await self.key_hints_for_pubkeys(pks),

@@ -51,7 +51,7 @@ class TransactionInfo(ClvmStreamable):
 
 
 class SigningTarget(ClvmStreamable):
-    pubkey: bytes
+    fingerprint: bytes
     message: bytes
     hook: bytes32
 

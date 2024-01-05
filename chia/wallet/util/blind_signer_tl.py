@@ -22,7 +22,7 @@ from chia.wallet.util.clvm_streamable import ClvmStreamable, TransportLayer, Tra
 
 
 class BSTLSigningTarget(ClvmStreamable):
-    pubkey: bytes = field(metadata=dict(key="p"))
+    fingerprint: bytes = field(metadata=dict(key="f"))
     message: bytes = field(metadata=dict(key="m"))
     hook: bytes32 = field(metadata=dict(key="h"))
 
