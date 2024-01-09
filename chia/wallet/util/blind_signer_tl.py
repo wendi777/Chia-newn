@@ -38,6 +38,7 @@ class BSTLSigningTarget(ClvmStreamable):
 class BSTLSumHint(ClvmStreamable):
     fingerprints: List[bytes] = field(metadata=dict(key="f"))
     synthetic_offset: bytes = field(metadata=dict(key="o"))
+    final_pubkey: bytes = field(metadata=dict(key="p"))
 
     @staticmethod
     def from_wallet_api(_from: SumHint) -> BSTLSumHint:

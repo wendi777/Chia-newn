@@ -30,10 +30,12 @@ from chia.types.blockchain_format.program import Program
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.coin_spend import CoinSpend, make_spend
 from chia.types.spend_bundle import SpendBundle
+from chia.util.hash import std_hash
 from chia.util.ints import uint64
 from chia.util.streamable import ConversionError, Streamable, streamable
 from chia.wallet.conditions import AggSigMe
 from chia.wallet.derivation_record import DerivationRecord
+from chia.wallet.derive_keys import _derive_path_unhardened
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     DEFAULT_HIDDEN_PUZZLE_HASH,
     calculate_synthetic_offset,
@@ -283,7 +285,10 @@ def test_transport_layer() -> None:
 
 
 def test_blind_signer_transport_layer() -> None:
-    sum_hints: List[SumHint] = [SumHint([b"a", b"b", b"c"], b"offset"), SumHint([b"c", b"b", b"a"], b"offset2")]
+    sum_hints: List[SumHint] = [
+        SumHint([b"a", b"b", b"c"], b"offset", b"final"),
+        SumHint([b"c", b"b", b"a"], b"offset2", b"final"),
+    ]
     path_hints: List[PathHint] = [
         PathHint(b"root1", [uint64(1), uint64(2), uint64(3)]),
         PathHint(b"root2", [uint64(4), uint64(5), uint64(6)]),
@@ -307,8 +312,8 @@ def test_blind_signer_transport_layer() -> None:
     )
 
     bstl_sum_hints: List[BSTLSumHint] = [
-        BSTLSumHint([b"a", b"b", b"c"], b"offset"),
-        BSTLSumHint([b"c", b"b", b"a"], b"offset2"),
+        BSTLSumHint([b"a", b"b", b"c"], b"offset", b"final"),
+        BSTLSumHint([b"c", b"b", b"a"], b"offset2", b"final"),
     ]
     bstl_path_hints: List[BSTLPathHint] = [
         BSTLPathHint(b"root1", [uint64(1), uint64(2), uint64(3)]),
@@ -408,6 +413,7 @@ async def test_p2dohp_wallet_signer_protocol(wallet_environments: WalletTestFram
         SumHint(
             [pubkey.get_fingerprint().to_bytes(4, "big")],
             calculate_synthetic_offset(pubkey, DEFAULT_HIDDEN_PUZZLE_HASH).to_bytes(32, "big"),
+            wallet_state_manager.main_wallet.puzzle_for_pk(pubkey).uncurry()[1].at("f").as_atom(),
         )
     ]
     assert utx.signing_instructions.key_hints.path_hints == [
@@ -430,7 +436,7 @@ async def test_p2dohp_wallet_signer_protocol(wallet_environments: WalletTestFram
     # Now test that we can partially sign a transaction
     ACS: Program = Program.to(1)
     ACS_PH: Program = Program.to(1).get_tree_hash()
-    not_our_private_key: PrivateKey = PrivateKey.from_bytes(bytes(32))
+    not_our_private_key: PrivateKey = PrivateKey.from_bytes(bytes([1] * 32))
     not_our_pubkey: G1Element = not_our_private_key.get_g1()
     not_our_message: bytes = b"not our message"
     not_our_coin: ConsensusCoin = ConsensusCoin(
@@ -468,7 +474,7 @@ async def test_p2dohp_wallet_signer_protocol(wallet_environments: WalletTestFram
                 not_our_signing_instructions.key_hints,
                 sum_hints=[
                     *not_our_signing_instructions.key_hints.sum_hints,
-                    SumHint([bytes(not_our_pubkey)], b""),
+                    SumHint([bytes(not_our_pubkey)], b"", bytes(G1Element())),
                 ],
             ),
         )
@@ -534,6 +540,210 @@ async def test_p2dohp_wallet_signer_protocol(wallet_environments: WalletTestFram
     with clvm_serialization_mode(True, transport_layer=BLIND_SIGNER_TRANSPORT):
         response: GatherSigningInfoResponse = GatherSigningInfoResponse.from_json_dict(response_dict)
         assert response.signing_instructions == not_our_utx.signing_instructions
+
+
+@pytest.mark.parametrize(
+    "wallet_environments",
+    [
+        {
+            "num_environments": 1,
+            "blocks_needed": [1],
+            "trusted": True,
+            "reuse_puzhash": True,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.anyio
+async def test_p2blsdohp_execute_signing_instructions(wallet_environments: WalletTestFramework) -> None:
+    wallet: Wallet = wallet_environments.environments[0].xch_wallet
+    root_sk: PrivateKey = wallet.wallet_state_manager.get_master_private_key()
+    root_pk: G1Element = root_sk.get_g1()
+    root_fingerprint: bytes = root_pk.get_fingerprint().to_bytes(4, "big")
+
+    # Test just a path hint
+    test_name: bytes32 = std_hash(b"path hint only")
+    child_sk: PrivateKey = _derive_path_unhardened(root_sk, [uint64(1), uint64(2), uint64(3), uint64(4)])
+    signing_responses: List[SigningResponse] = await wallet.execute_signing_instructions(
+        SigningInstructions(
+            KeyHints(
+                [],
+                [PathHint(root_fingerprint, [uint64(1), uint64(2), uint64(3), uint64(4)])],
+            ),
+            [SigningTarget(child_sk.get_g1().get_fingerprint().to_bytes(4, "big"), test_name, test_name)],
+        )
+    )
+    assert signing_responses == [SigningResponse(bytes(AugSchemeMPL.sign(child_sk, test_name)), test_name)]
+
+    # Test just a sum hint
+    test_name = std_hash(b"sum hint only")
+    other_sk: PrivateKey = PrivateKey.from_bytes(test_name)
+    sum_pk: G1Element = other_sk.get_g1() + root_pk
+    signing_instructions: SigningInstructions = SigningInstructions(
+        KeyHints(
+            [SumHint([root_fingerprint], test_name, bytes(sum_pk))],
+            [],
+        ),
+        [SigningTarget(sum_pk.get_fingerprint().to_bytes(4, "big"), test_name, test_name)],
+    )
+    for partial_allowed in (True, False):
+        signing_responses = await wallet.execute_signing_instructions(signing_instructions, partial_allowed)
+        assert signing_responses == [
+            SigningResponse(
+                bytes(
+                    AugSchemeMPL.aggregate(
+                        [
+                            AugSchemeMPL.sign(other_sk, test_name, sum_pk),
+                            AugSchemeMPL.sign(root_sk, test_name, sum_pk),
+                        ]
+                    )
+                ),
+                test_name,
+            ),
+        ]
+    # Toss in a random SigningTarget to see that the responses split up
+    signing_instructions = dataclasses.replace(
+        signing_instructions,
+        targets=[
+            SigningTarget(sum_pk.get_fingerprint().to_bytes(4, "big"), test_name, test_name),
+            SigningTarget(b"random fingerprint", test_name, test_name),
+        ],
+    )
+    signing_responses = await wallet.execute_signing_instructions(signing_instructions, partial_allowed=True)
+    assert signing_responses == [
+        SigningResponse(
+            bytes(
+                AugSchemeMPL.sign(root_sk, test_name, sum_pk),
+            ),
+            test_name,
+        ),
+        SigningResponse(
+            bytes(
+                AugSchemeMPL.sign(other_sk, test_name, sum_pk),
+            ),
+            test_name,
+        ),
+    ]
+
+    # Test both path and sum hint
+    test_name = std_hash(b"path and sum hint")
+    child_sk = _derive_path_unhardened(root_sk, [uint64(1), uint64(2), uint64(3), uint64(4)])
+    other_sk = PrivateKey.from_bytes(test_name)
+    sum_pk = child_sk.get_g1() + other_sk.get_g1()
+    signing_instructions = SigningInstructions(
+        KeyHints(
+            [SumHint([child_sk.get_g1().get_fingerprint().to_bytes(4, "big")], test_name, bytes(sum_pk))],
+            [PathHint(root_fingerprint, [uint64(1), uint64(2), uint64(3), uint64(4)])],
+        ),
+        [SigningTarget(sum_pk.get_fingerprint().to_bytes(4, "big"), test_name, test_name)],
+    )
+    for partial_allowed in (True, False):
+        signing_responses = await wallet.execute_signing_instructions(signing_instructions, partial_allowed)
+        assert signing_responses == [
+            SigningResponse(
+                bytes(
+                    AugSchemeMPL.aggregate(
+                        [
+                            AugSchemeMPL.sign(other_sk, test_name, sum_pk),
+                            AugSchemeMPL.sign(child_sk, test_name, sum_pk),
+                        ]
+                    )
+                ),
+                test_name,
+            ),
+        ]
+
+    # Test partial signing
+    test_name = std_hash(b"path and sum hint partial")
+    test_name_2 = std_hash(test_name)
+    root_sk_2 = PrivateKey.from_bytes(std_hash(b"a key we do not have"))
+    child_sk = _derive_path_unhardened(root_sk, [uint64(1), uint64(2), uint64(3), uint64(4)])
+    child_sk_2 = _derive_path_unhardened(root_sk_2, [uint64(1), uint64(2), uint64(3), uint64(4)])
+    other_sk = PrivateKey.from_bytes(test_name)
+    other_sk_2 = PrivateKey.from_bytes(test_name_2)
+    sum_pk = child_sk.get_g1() + other_sk.get_g1()
+    sum_pk_2 = child_sk_2.get_g1() + other_sk_2.get_g1()
+    signing_responses = await wallet.execute_signing_instructions(
+        SigningInstructions(
+            KeyHints(
+                [
+                    SumHint([child_sk.get_g1().get_fingerprint().to_bytes(4, "big")], test_name, bytes(sum_pk)),
+                    SumHint([child_sk_2.get_g1().get_fingerprint().to_bytes(4, "big")], test_name_2, bytes(sum_pk_2)),
+                ],
+                [
+                    PathHint(root_fingerprint, [uint64(1), uint64(2), uint64(3), uint64(4)]),
+                    PathHint(
+                        root_sk_2.get_g1().get_fingerprint().to_bytes(4, "big"),
+                        [uint64(1), uint64(2), uint64(3), uint64(4)],
+                    ),
+                ],
+            ),
+            [
+                SigningTarget(sum_pk.get_fingerprint().to_bytes(4, "big"), test_name, test_name),
+                SigningTarget(sum_pk_2.get_fingerprint().to_bytes(4, "big"), test_name_2, test_name_2),
+            ],
+        ),
+        partial_allowed=True,
+    )
+    assert signing_responses == [
+        SigningResponse(
+            bytes(
+                AugSchemeMPL.sign(child_sk, test_name, sum_pk),
+            ),
+            test_name,
+        ),
+        SigningResponse(
+            bytes(AugSchemeMPL.sign(other_sk, test_name, sum_pk)),
+            test_name,
+        ),
+        SigningResponse(bytes(AugSchemeMPL.sign(other_sk_2, test_name_2, sum_pk_2)), test_name_2),
+    ]
+
+    # Test errors
+    unknown_path_hint = SigningInstructions(
+        KeyHints(
+            [],
+            [PathHint(b"unknown fingerprint", [uint64(1), uint64(2), uint64(3), uint64(4)])],
+        ),
+        [],
+    )
+    unknown_sum_hint = SigningInstructions(
+        KeyHints(
+            [SumHint([b"unknown fingerprint"], b"", bytes(G1Element()))],
+            [],
+        ),
+        [],
+    )
+    unknown_target = SigningInstructions(
+        KeyHints(
+            [],
+            [],
+        ),
+        [SigningTarget(b"unknown fingerprint", b"", std_hash(b"some hook"))],
+    )
+    with pytest.raises(ValueError, match="No root pubkey for fingerprint"):
+        await wallet.execute_signing_instructions(unknown_path_hint)
+    with pytest.raises(ValueError, match="No pubkey found"):
+        await wallet.execute_signing_instructions(unknown_sum_hint)
+    with pytest.raises(ValueError, match="not found"):
+        await wallet.execute_signing_instructions(unknown_target)
+
+    # Test no private key partial sign sum hint
+    wallet.wallet_state_manager.private_key = None
+    test_name = std_hash(b"sum hint partial no private key")
+    other_sk = PrivateKey.from_bytes(test_name)
+    sum_pk = other_sk.get_g1() + root_pk
+    signing_responses = await wallet.execute_signing_instructions(
+        SigningInstructions(
+            KeyHints(
+                [SumHint([root_fingerprint], test_name, bytes(sum_pk))],
+                [],
+            ),
+            [SigningTarget(sum_pk.get_fingerprint().to_bytes(4, "big"), test_name, test_name)],
+        ),
+        partial_allowed=True,
+    )
+    assert signing_responses == [SigningResponse(bytes(AugSchemeMPL.sign(other_sk, test_name, sum_pk)), test_name)]
 
 
 @pytest.mark.parametrize(
