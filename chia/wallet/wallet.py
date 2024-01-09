@@ -672,6 +672,7 @@ class Wallet:
     async def apply_signatures(
         self, spends: List[Spend], signing_responses: List[SigningResponse]
     ) -> SignedTransaction:
+        signing_responses_set = set(signing_responses)
         return SignedTransaction(
             TransactionInfo(spends),
             [
@@ -679,7 +680,10 @@ class Wallet:
                     "bls_12381_aug_scheme",
                     bytes(
                         AugSchemeMPL.aggregate(
-                            [G2Element.from_bytes(signing_response.signature) for signing_response in signing_responses]
+                            [
+                                G2Element.from_bytes(signing_response.signature)
+                                for signing_response in signing_responses_set
+                            ]
                         )
                     ),
                 )
