@@ -468,34 +468,39 @@ async def test_p2dohp_wallet_signer_protocol(wallet_environments: WalletTestFram
     with pytest.raises(ValueError, match=r"not found \(or path/sum hinted to\)"):
         await wallet_state_manager.execute_signing_instructions(not_our_signing_instructions)
     with pytest.raises(ValueError, match=r"No pubkey found \(or path hinted to\) for fingerprint"):
-        not_our_signing_instructions = dataclasses.replace(
-            not_our_signing_instructions,
-            key_hints=dataclasses.replace(
-                not_our_signing_instructions.key_hints,
-                sum_hints=[
-                    *not_our_signing_instructions.key_hints.sum_hints,
-                    SumHint([bytes(not_our_pubkey)], b"", bytes(G1Element())),
-                ],
-            ),
+        await wallet_state_manager.execute_signing_instructions(
+            dataclasses.replace(
+                not_our_signing_instructions,
+                key_hints=dataclasses.replace(
+                    not_our_signing_instructions.key_hints,
+                    sum_hints=[
+                        *not_our_signing_instructions.key_hints.sum_hints,
+                        SumHint([bytes(not_our_pubkey)], std_hash(b"sum hint only"), bytes(G1Element())),
+                    ],
+                ),
+            )
         )
-        await wallet_state_manager.execute_signing_instructions(not_our_signing_instructions)
     with pytest.raises(ValueError, match="No root pubkey for fingerprint"):
-        not_our_signing_instructions = dataclasses.replace(
-            not_our_signing_instructions,
-            key_hints=dataclasses.replace(
-                not_our_signing_instructions.key_hints,
-                path_hints=[
-                    *not_our_signing_instructions.key_hints.path_hints,
-                    PathHint(bytes(not_our_pubkey), [uint64(0)]),
-                ],
-            ),
+        await wallet_state_manager.execute_signing_instructions(
+            dataclasses.replace(
+                not_our_signing_instructions,
+                key_hints=dataclasses.replace(
+                    not_our_signing_instructions.key_hints,
+                    path_hints=[
+                        *not_our_signing_instructions.key_hints.path_hints,
+                        PathHint(bytes(not_our_pubkey), [uint64(0)]),
+                    ],
+                ),
+            )
         )
-        await wallet_state_manager.execute_signing_instructions(not_our_signing_instructions)
     signing_responses_2 = await wallet_state_manager.execute_signing_instructions(
         not_our_signing_instructions, partial_allowed=True
     )
-    assert len(signing_responses_2) == 1
-    assert signing_responses_2 == signing_responses
+    assert len(signing_responses_2) == 2
+    assert (
+        bytes(AugSchemeMPL.aggregate([G2Element.from_bytes(sig.signature) for sig in signing_responses_2]))
+        == signing_responses[0].signature
+    )
 
     signed_txs: List[SignedTransaction] = (
         await wallet_rpc.apply_signatures(
