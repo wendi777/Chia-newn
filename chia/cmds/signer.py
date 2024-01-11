@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import itertools
+import json
 import os
 import sys
 import time
@@ -309,6 +310,17 @@ class SPIn(_SPCompression):
 
         return final_list
 
+    def read_signing_responses_json(self) -> List[_T_ClvmStreamable]:
+        signing_responses: List[SigningResponse] = []
+        for filename in self.signer_protocol_input:
+            with open(Path(filename), "r") as file:
+                data = json.loads(file.read())
+            for item in data:
+                signature = bytes.fromhex(item["signature"])
+                hook = bytes.fromhex(item["hook"])
+                signing_responses.append(SigningResponse(signature=signature, hook=hook))
+
+        return signing_responses
 
 @dataclass(frozen=True)
 class SPOut(QrCodeDisplay, _SPCompression):
@@ -388,7 +400,8 @@ class ApplySignaturesCMD(TransactionsOut, SPIn, TransactionsIn, NeedsWalletRPC, 
         return "Apply a signer's signatures to a transaction bundle"
 
     async def async_run(self) -> None:
-        signing_responses: List[SigningResponse] = self.read_sp_input(SigningResponse)
+        # signing_responses: List[SigningResponse] = self.read_sp_input(SigningResponse)
+        signing_responses: List[SigningResponse] = self.read_signing_responses_json()
         spends: List[Spend] = [
             Spend.from_coin_spend(cs)
             for tx in self.transaction_bundle.txs

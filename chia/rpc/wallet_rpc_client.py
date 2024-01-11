@@ -1690,12 +1690,12 @@ class WalletRpcClient(RpcClient):
         self,
         args: ApplySignatures,
     ) -> ApplySignaturesResponse:
-        return ApplySignaturesResponse.from_json_dict(
-            await self.fetch(
+        resp = await self.fetch(
                 "apply_signatures",
                 args.to_json_dict(),
             )
-        )
+        print(f"resp: {resp}")
+        return ApplySignaturesResponse.from_json_dict(resp)
 
     async def submit_transactions(
         self,
