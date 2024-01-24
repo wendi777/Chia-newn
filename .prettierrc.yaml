@@ -1,0 +1,4 @@
+tabWidth: 4
+singleQuote: false
+experimentalTernaries: true
+useTabs: false
